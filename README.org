@@ -20,12 +20,8 @@ poetry add package-name
 :ID:       CD556F08-DD91-4D41-8746-81759F27C2F9
 :END:
 #+BEGIN_SRC sh
-poetry run jupyter contrib nbextension install --user && poetry run j jupyter nbextensions_configurator enable --user
+poetry run jupyter contrib nbextension install --user && poetry run jupyter nbextensions_configurator enable --user
 #+END_SRC
-
-
-[[download:CD/556F08-DD91-4D41-8746-81759F27C2F9/_20200331_192830collapsible_heading.png]]
-
 
 ** Data
 Copy the files ~sales_train_validation.csv~ and ~sell_prices.csv~ in the ~data~ folder
