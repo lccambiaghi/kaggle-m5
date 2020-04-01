@@ -25,40 +25,40 @@ def get_sales_and_price_wide(sales, prices, calendar):
     return prices_wide, sales_wide
 
 def compute_float_features(sales_wide, prices_wide, forecast_horizon = 28):
-    float_features_wide = {}
+    all_features_wide = {}
     for lag in tqdm([0, 7, 28], "autoregressive features"):
-        autoregressive = sales_wide.shift(lag, axis=1)
-        float_features_wide[f"ar_{lag}"] = autoregressive
+        autoregressive = sales_wide.shift(forecast_horizon + lag, axis=1)
+        all_features_wide[f"ar_{lag}"] = autoregressive
 
-    for window in tqdm([7, 28, 56, 91], "rolling features"):
-        mean = sales_wide.rolling(window, axis=1).mean()
-        float_features_wide[f"mean_{window}_h{forecast_horizon}"] = mean
+    for window in tqdm([7, 30, 60, 90, 180], "rolling features"):
+        mean = sales_wide.shift(forecast_horizon, axis=1).rolling(window, axis=1).mean()
+        all_features_wide[f"mean_{window}"] = mean
 
-        std = sales_wide.rolling(window, axis=1).std()
-        float_features_wide[f"std_{window}_h{forecast_horizon}"] = std
+        std = sales_wide.shift(forecast_horizon, axis=1).rolling(window, axis=1).std()
+        all_features_wide[f"std_{window}"] = std
 
-        ewma = sales_wide.ewm(span=window, min_periods=window).mean()
-        float_features_wide[f"ewma_{window}_h{forecast_horizon}"] = ewma
+        ewma = sales_wide.shift(forecast_horizon, axis=1).ewm(span=window, min_periods=window).mean()
+        all_features_wide[f"ewma_{window}"] = ewma
 
-    for window in tqdm([28], "skew, kurt features"):
-        skew = sales_wide.rolling(window, axis=1).skew()
-        float_features_wide[f"skew_{window}_h{forecast_horizon}"] = skew
+    for window in tqdm([30], "skew, kurt features"):
+        skew = sales_wide.shift(forecast_horizon, axis=1).rolling(window, axis=1).skew()
+        all_features_wide[f"skew_{window}"] = skew
 
-        kurt = sales_wide.rolling(window, axis=1).kurt()
-        float_features_wide[f"kurt_{window}_h{forecast_horizon}"] = kurt
+        kurt = sales_wide.shift(forecast_horizon, axis=1).rolling(window, axis=1).kurt()
+        all_features_wide[f"kurt_{window}"] = kurt
 
-    for window in tqdm([7, 28], "price std features"):
+    for window in tqdm([7, 30], "price std features"):
         price_std = prices_wide.rolling(window, axis=1).std()
-        float_features_wide[f"price_std_{window}"] = price_std
+        all_features_wide[f"price_std_{window}"] = price_std
 
     for window in tqdm([365], "price change features"):
         price_max_year = prices_wide.rolling(window, axis=1).max()
         price_change_year = (prices_wide - price_max_year) / price_max_year
         price_change_week = (prices_wide - prices_wide.shift(1, axis=1)) / prices_wide.shift(1, axis=1)
 
-        float_features_wide[f"price_max_365"] = price_max_year
-        float_features_wide[f"price_change_365"] = price_change_year
-        float_features_wide[f"price_change_7"] = price_change_week
+        all_features_wide[f"price_max_365"] = price_max_year
+        all_features_wide[f"price_change_365"] = price_change_year
+        all_features_wide[f"price_change_7"] = price_change_week
 
     return float_features_wide
 

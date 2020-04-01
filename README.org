@@ -15,10 +15,7 @@ To add dependencies:
 #+BEGIN_SRC sh
 poetry add package-name
 #+END_SRC
-** Enable jupyter notebook collapsible headings :ATTACH:
-:PROPERTIES:
-:ID:       CD556F08-DD91-4D41-8746-81759F27C2F9
-:END:
+** Enable jupyter notebook collapsible headings
 #+BEGIN_SRC sh
 poetry run jupyter contrib nbextension install --user && poetry run jupyter nbextensions_configurator enable --user
 #+END_SRC
