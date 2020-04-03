@@ -18,7 +18,7 @@ prices = pd.read_csv(data / 'sell_prices.csv', dtype={
     'store_id': 'category', 'item_id': 'category'
 })
 calendar = pd.read_csv(data / 'calendar.csv', parse_dates=['date'], dtype={
-    'weekday':'category', 'd':'category', 'event_name':'category', 'event_type_1':'category', 'event_type_2':'category',
+    'weekday':'category', 'd':'category', 'event_name_1':'category', 'event_type_1':'category', 'event_type_2':'category',
     'snap_CA':'category', 'snap_TX':'category', 'snap_WI':'category'
 })
 
@@ -26,16 +26,31 @@ cat_features = ['item_id', 'store_id',
             'event_name_1', 'event_type_1', 'snap_CA', 'snap_TX', 'snap_WI',
             'is_year_end', 'is_year_start', 'is_month_start', 'is_month_end', 'is_quarter_start', 'is_quarter_end', 'is_weekend']
 
-X_train, y_train, X_val, y_val = get_X_and_y(sales.iloc[:100, :], prices, calendar, cat_features)
+(X_train, y_train), (X_val, y_val), X_test = get_X_and_y(sales, prices, calendar, cat_features)
 
 train_set = lgb.Dataset(X_train, y_train, categorical_feature = cat_features, free_raw_data=False)
 val_set = lgb.Dataset(X_val, y_val, categorical_feature = cat_features, reference=train_set, free_raw_data=False)
 
-params = {'metric': 'l2', 'objective': 'regression','seed': 23}
+PARAMS = {
+    "num_leaves": 80,
+    "seed": 23,
+    "objective": "regression",
+    "boosting_type": "gbdt",
+    "min_data_in_leaf": 200,
+    "learning_rate": 0.02,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.7,
+    "bagging_freq": 1,
+    "metric": "l2",
+    "num_boost_round": 5000,
+    "early_stopping_rounds": 125,
+    "verbose_eval": 50,
+}
 
-model = lgb.train(params, train_set, num_boost_round = 5000, early_stopping_rounds=100,
-                  valid_sets = [train_set, val_set], verbose_eval = 100)
+model = lgb.train(PARAMS, train_set,
+                  valid_sets = [train_set, val_set])
 model.save_model('model.txt')
+y_pred = model.predict(X_test)
 
 def get_y_weights(y: pd.Series, normalize=False):
     """
