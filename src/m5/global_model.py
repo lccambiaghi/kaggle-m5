@@ -25,8 +25,8 @@ def get_sales_and_prices_wide(sales, prices, calendar):
     # only consider prices for items in sales_wide
     prices_wide = prices_wide.loc[prices_wide.index.intersection(sales_wide.index), :]
     # set demand to NA in dates where a product was not available
-    # sales_wide = sales_wide.where(prices_wide.notnull())
-    # log.info(f'Replaced {np.count_nonzero(sales_wide.isna())} zero sales with NA')
+    sales_wide = sales_wide.where(prices_wide.notnull())
+    log.info(f'Replaced {np.count_nonzero(sales_wide.isna())} zero sales with NA')
 
     return sales_wide, prices_wide
 
@@ -38,13 +38,14 @@ def compute_sales_features(sales_wide):
         sales_features_wide[f"ar_{lag}"] = autoregressive
 
     for window in tqdm([7, 30, 60, 90, 180], "rolling features"):
-        mean = sales_wide.rolling(window, axis=1).mean()
+        min_periods = window if window <30 else 30
+        mean = sales_wide.rolling(window, axis=1, min_periods=min_periods).mean()
         sales_features_wide[f"mean_{window}"] = mean
 
-        std = sales_wide.rolling(window, axis=1).std()
+        std = sales_wide.rolling(window, axis=1, min_periods=min_periods).std()
         sales_features_wide[f"std_{window}"] = std
 
-        ewma = sales_wide.ewm(span=window).mean()
+        ewma = sales_wide.ewm(span=window, min_periods=min_periods).mean()
         sales_features_wide[f"ewma_{window}"] = ewma
 
     for window in tqdm([30], "skew, kurt features"):
@@ -63,7 +64,7 @@ def compute_prices_features(prices_wide):
         prices_features_wide[f"price_std_{window}"] = price_std
 
     for window in tqdm([365], "price change features"):
-        price_max_year = prices_wide.rolling(window, axis=1).max()
+        price_max_year = prices_wide.rolling(window, axis=1, min_periods=30).max()
         price_change_year = (prices_wide - price_max_year) / price_max_year
         price_change_week = (prices_wide - prices_wide.shift(1, axis=1)) / prices_wide.shift(1, axis=1)
 
@@ -141,7 +142,8 @@ def build_design_matrix(rolling_features, prices_features, calendar, cat_feature
     # only consider dates for which all features have at least one observation
     for name, f in rolling_features.items():
         train_val_test_dates = train_val_test_dates.intersection(f.dropna(axis=1, how='all').columns)
-        assert all(val_dates.union(test_dates).isin(train_val_test_dates)), f'{name} is always NA for val or test dates'
+        val_test_missing_dates = val_dates.union(test_dates).difference(train_val_test_dates)
+        # assert len(val_test_missing_dates) == 0, f'{name} is always NA for dates {val_test_missing_dates}'
 
     train_dates = train_val_test_dates.difference(test_dates).difference(val_dates)[-train_days:]
     log.info(f'Using {len(train_dates)} train days, {len(val_dates)} val days, {len(test_dates)} test days')
