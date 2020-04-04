@@ -3,33 +3,37 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import lightgbm as lgb
+from lightgbm import plot_importance
+import matplotlib.pyplot as plt
+import neptune
+from neptunecontrib.monitoring.lightgbm import neptune_monitor
 
-# import sys
-# sys.path.append('src')
 from m5.global_model import get_X_and_y
 from m5.hierarchy import compute_series_weights
 
 
 data = Path('data/')
-sales = pd.read_csv(data / 'sales_train_validation.csv', dtype={
-    'item_id':'category', 'dept_id':'category', 'cat_id':'category', 'store_id':'category', 'state_id':'category'
-})
-prices = pd.read_csv(data / 'sell_prices.csv', dtype={
-    'store_id': 'category', 'item_id': 'category'
-})
-calendar = pd.read_csv(data / 'calendar.csv', parse_dates=['date'], dtype={
-    'weekday':'category', 'd':'category', 'event_name_1':'category', 'event_type_1':'category', 'event_type_2':'category',
-    'snap_CA':'category', 'snap_TX':'category', 'snap_WI':'category'
-})
+sales = pd.read_csv(data / 'sales_train_validation.csv')
+prices = pd.read_csv(data / 'sell_prices.csv')
+calendar = pd.read_csv(data / 'calendar.csv', parse_dates=['date'])
+
+# cast to categories with same cat codes
+sales['item_id'] = pd.Categorical(sales['item_id'], ordered=True)
+sales['store_id'] = pd.Categorical(sales['store_id'], ordered=True)
+prices['item_id'] = pd.Categorical(prices['item_id'], categories=sales['item_id'].cat.categories, ordered=True)
+prices['store_id'] = pd.Categorical(prices['store_id'], categories=sales['store_id'].cat.categories, ordered=True)
 
 cat_features = ['item_id', 'store_id',
             'event_name_1', 'event_type_1', 'snap_CA', 'snap_TX', 'snap_WI',
             'is_year_end', 'is_year_start', 'is_month_start', 'is_month_end', 'is_quarter_start', 'is_quarter_end', 'is_weekend']
 
-(X_train, y_train), (X_val, y_val), X_test = get_X_and_y(sales, prices, calendar, cat_features)
+forecast_horizon = 28
+(X_train, y_train), (X_val, y_val), X_test = get_X_and_y(sales, prices, calendar, cat_features, val_days = 90)
 
 train_set = lgb.Dataset(X_train, y_train, categorical_feature = cat_features, free_raw_data=False)
 val_set = lgb.Dataset(X_val, y_val, categorical_feature = cat_features, reference=train_set, free_raw_data=False)
+
+NEPTUNE=True
 
 PARAMS = {
     "num_leaves": 80,
@@ -43,14 +47,47 @@ PARAMS = {
     "bagging_freq": 1,
     "metric": "l2",
     "num_boost_round": 5000,
-    "early_stopping_rounds": 125,
-    "verbose_eval": 50,
 }
 
-model = lgb.train(PARAMS, train_set,
-                  valid_sets = [train_set, val_set])
-model.save_model('model.txt')
-y_pred = model.predict(X_test)
+callbacks=[]
+if NEPTUNE:
+    neptune.set_project("lccambiaghi/kaggle-m5")
+    neptune.create_experiment(
+        name=f"lightgbm",
+        send_hardware_metrics=False,
+        run_monitoring_thread=False,
+        params=PARAMS,
+    )
+    callbacks.append(neptune_monitor(prefix=f'h{forecast_horizon}_'))
+
+
+model = lgb.train(PARAMS, train_set, early_stopping_rounds=125, verbose_eval=100,
+                  valid_sets = [train_set, val_set], callbacks=callbacks)
+
+model_filename = f'data/models/h{forecast_horizon}_lgbm.txt'
+model.save_model(model_filename)
+# log feature importance
+fig, ax = plt.subplots()
+plot_importance(model, max_num_features=20, figsize=(20,10), ax=ax)
+importance_filename = f'plots/h{forecast_horizon}_lgbm_importance'
+# save val predictions
+y_pred_val = model.predict(X_val, num_iteration=model.best_iteration)
+y_pred_val = pd.DataFrame(y_pred_val, index=X_val.index, columns=['prediction'])
+y_pred_val_filename = f'data/preds/h{forecast_horizon}_y_pred_val.parquet'
+y_pred_val.to_parquet(output_filename)
+# save test predictions
+y_pred_test = model.predict(X_test, num_iteration=model.best_iteration)
+y_pred_test = pd.DataFrame(y_pred_test, index=X_test.index, columns=['prediction'])
+y_pred_test_filename = f'data/preds/h{forecast_horizon}_y_pred_test.parquet'
+y_pred_test.to_parquet(output_filename)
+
+if NEPTUNE:
+    neptune.log_metric(f"h{forecast_horizon}_val_rmse", val_rmse)
+    neptune.log_artifact(model_filename)
+    neptune.log_image(importance_filename, fig)
+    neptune.log_artifact(y_pred_val_filename)
+    neptune.log_artifact(y_pred_test_filename)
+    neptune.stop()
 
 def get_y_weights(y: pd.Series, normalize=False):
     """

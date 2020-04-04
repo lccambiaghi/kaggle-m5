@@ -14,7 +14,7 @@ def get_sales_and_prices_wide(sales, prices, calendar):
     sales_wide = sales.rename(columns=day_to_date)
     # select dates
     all_dates = sales_wide.select_dtypes('int').columns
-    sales_wide = sales_wide.set_index(['item_id', 'store_id'])[all_dates]
+    sales_wide = sales_wide.set_index(['item_id', 'store_id'])[all_dates].sort_index()
     sales_wide.columns = pd.to_datetime(sales_wide.columns).rename('date')
     # add date to prices
     prices_wide = prices.merge(calendar[['date', 'wm_yr_wk']]).drop(columns=['wm_yr_wk']).set_index(['date', 'item_id', 'store_id']).unstack(level='date').sort_index()
@@ -27,6 +27,9 @@ def get_sales_and_prices_wide(sales, prices, calendar):
     # set demand to NA in dates where a product was not available
     sales_wide = sales_wide.where(prices_wide.notnull())
     log.info(f'Replaced {np.count_nonzero(sales_wide.isna())} zero sales with NA')
+    # cast to float32 to avoid mixed types
+    sales_wide = sales_wide.astype('float32')
+    prices_wide = prices_wide.astype('float32')
 
     return sales_wide, prices_wide
 
@@ -42,13 +45,13 @@ def compute_sales_features(sales_wide):
         mean = sales_wide.rolling(window, axis=1, min_periods=min_periods).mean()
         sales_features_wide[f"mean_{window}"] = mean
 
-        std = sales_wide.rolling(window, axis=1, min_periods=min_periods).std()
-        sales_features_wide[f"std_{window}"] = std
-
         ewma = sales_wide.ewm(span=window, min_periods=min_periods).mean()
         sales_features_wide[f"ewma_{window}"] = ewma
 
-    for window in tqdm([30], "skew, kurt features"):
+    for window in tqdm([7, 30], "skew, kurt features"):
+        std = sales_wide.rolling(window, axis=1).std()
+        sales_features_wide[f"std_{window}"] = std
+
         skew = sales_wide.rolling(window, axis=1).skew()
         sales_features_wide[f"skew_{window}"] = skew
 
@@ -141,9 +144,11 @@ def build_design_matrix(rolling_features, prices_features, calendar, cat_feature
     train_val_test_dates = list(prices_features.values())[0].columns
     # only consider dates for which all features have at least one observation
     for name, f in rolling_features.items():
-        train_val_test_dates = train_val_test_dates.intersection(f.dropna(axis=1, how='all').columns)
-        val_test_missing_dates = val_dates.union(test_dates).difference(train_val_test_dates)
-        # assert len(val_test_missing_dates) == 0, f'{name} is always NA for dates {val_test_missing_dates}'
+        feature_good_dates = f.dropna(axis=1, how='all').columns
+        missing_val_test_dates = val_dates.union(test_dates).difference(feature_good_dates)
+        if any(missing_val_test_dates):
+            log.error(f'{name} is always NA for dates {missing_val_test_dates}')
+        train_val_test_dates = train_val_test_dates.intersection(feature_good_dates)
 
     train_dates = train_val_test_dates.difference(test_dates).difference(val_dates)[-train_days:]
     log.info(f'Using {len(train_dates)} train days, {len(val_dates)} val days, {len(test_dates)} test days')
@@ -194,10 +199,11 @@ def get_X_and_y(sales: pd.DataFrame, prices: pd.DataFrame, calendar: pd.DataFram
     log.info(f'Keeping {100*len(non_null)/len(X_test)}% test observations')
     X_test = X_test.iloc[non_null]
 
-    assert X_train.shape[0] == y_train.shape[0]
-    assert X_val.shape[0] == y_val.shape[0]
-
     assert X_train.shape[1] == X_val.shape[1] == X_test.shape[1]
+    assert X_train.shape[0] == y_train.shape[0]
+    assert all(X_train.index[:5] == y_train.index[:5])
+    assert X_val.shape[0] == y_val.shape[0]
+    assert all(X_val.index[:5] == y_val.index[:5])
     assert X_test.notnull().all().all()
 
     return (X_train, y_train), (X_val, y_val), X_test
