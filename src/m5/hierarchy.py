@@ -43,32 +43,46 @@ def get_sales_long(sales: pd.DataFrame, groups: Dict[str, List[str]] = all_group
     return all_sales_grouped
 
 def compute_summing_matrix(sales: pd.DataFrame, groups=all_groups.copy()):
-    d_cols = [c for c in sales.columns if c.startswith('d_')]
+    sales['series_id'] = sales.reset_index().index
 
-    sales_grouped = sales.groupby(all_names[1:])[d_cols].sum()
+    # bottom submatrix
+    sales['level'] = 'item/store'
+    sales_grouped = sales.set_index(all_names)
     bottom_level = sales_grouped.index
-    sales_grouped['bottom_level_index'] = sales_grouped.reset_index().index
+    bottom_submatrix = pd.DataFrame(data=np.identity(sales.shape[0]), index=sales_grouped.index, columns=bottom_level)
 
-    top_row = pd.DataFrame(data=np.ones((1,sales_grouped.shape[0])), index=['total'], columns=bottom_level)
+    # top row
     groups.pop('total', None)
+    sales_grouped = sales.copy()
+    for m in all_names:
+        sales_grouped.loc[:, m] = 'all'
+    group_index = sales_grouped.groupby(all_names)['series_id'].agg(list).index
+    top_row = pd.DataFrame(data=np.ones((1,sales.shape[0])), index=group_index, columns=bottom_level)
 
-    bottom_submatrix = pd.DataFrame(data=np.identity(sales_grouped.shape[0]), index=bottom_level, columns=bottom_level)
-
+    # central submatrices
     central_submatrices = []
-    for _, group in groups.items():
-        sales_level = sales_grouped.groupby(group[1:])['bottom_level_index'].agg(list)
+    for level, level_names in groups.items():
+        sales_grouped = sales.groupby(level_names[1:], as_index=False)[['series_id']].agg(list)
 
         level_rows = []
-        for _, group in sales_level.iteritems():
-            row = np.zeros(sales_grouped.shape[0])
+        for _, group in sales_grouped['series_id'].iteritems():
+            row = np.zeros(sales.shape[0])
             row[group] = 1
             level_rows.append(row)
-        level_submatrix = pd.DataFrame(data=np.vstack(level_rows), index=sales_level.index, columns=bottom_level)
-        central_submatrices.insert(0, level_submatrix)
 
-    sum_matrix = pd.concat([top_row] + central_submatrices + [bottom_submatrix], sort=False)
+        missing = [c for c in all_names if c not in group]
+        for m in missing:
+            sales_grouped.loc[:, m] = 'all'
+        sales_grouped.loc[:, 'level'] = level
+        group_index = sales_grouped.set_index(all_names).index
 
-    return sum_matrix
+        level_submatrix = pd.DataFrame(data=np.vstack(level_rows), index=group_index, columns=bottom_level)
+        central_submatrices.append(level_submatrix)
+
+    central_submatrices = pd.concat(central_submatrices)
+    summing_matrix = pd.concat([top_row, central_submatrices, bottom_submatrix])
+
+    return summing_matrix
 
 def get_prices_long(prices: pd.DataFrame, calendar: pd.DataFrame, sales: pd.DataFrame, groups: Dict[str, List[str]] = all_groups, include_bottom_level=True, last_28_days=True):
     prices_d = prices.merge(calendar[['wm_yr_wk', 'd']]).drop(columns=['wm_yr_wk'])
