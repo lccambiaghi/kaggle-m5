@@ -56,6 +56,7 @@ def compute_summing_matrix(sales: pd.DataFrame, groups=all_groups.copy()):
     sales_grouped = sales.copy()
     for m in all_names:
         sales_grouped.loc[:, m] = 'all'
+    sales_grouped['level'] = 'total'
     group_index = sales_grouped.groupby(all_names)['series_id'].agg(list).index
     top_row = pd.DataFrame(data=np.ones((1,sales.shape[0])), index=group_index, columns=bottom_level)
 
@@ -70,7 +71,7 @@ def compute_summing_matrix(sales: pd.DataFrame, groups=all_groups.copy()):
             row[group] = 1
             level_rows.append(row)
 
-        missing = [c for c in all_names if c not in group]
+        missing = [c for c in all_names if c not in level_names]
         for m in missing:
             sales_grouped.loc[:, m] = 'all'
         sales_grouped.loc[:, 'level'] = level
@@ -129,13 +130,28 @@ def compute_series_weights(sales: pd.DataFrame, prices: pd.DataFrame, calendar: 
     dollar_value.loc[:, 'series_weight'] = dollar_value['series_dollar_value_scaled'] / (1 + len(groups))
     return dollar_value
 
-def get_sales_long_with_nan(sales, prices, calendar, groups={}):
-    prices_long = get_prices_long(prices, calendar, sales, groups=groups, last_28_days=False)
-    sales_long = get_sales_long(sales, groups=groups)
-    assert all(sales_long.columns == prices_long.columns)
+def set_nan_sales(sales, prices, calendar):
+    d_cols = [c for c in sales.columns if c.startswith('d_')]
+    # get time in the columns
+    prices_wide = prices.merge(calendar[['d', 'wm_yr_wk']]).drop(columns=['wm_yr_wk']).set_index(['d', 'item_id', 'store_id']).unstack(level='d')
+    prices_wide.columns = prices_wide.columns.droplevel(0)
+    # set demand to NA in dates where a product was not available
+    sales[d_cols] = sales[d_cols].where(prices_wide.reset_index().notnull())
 
-    prices_long = prices_long.loc[sales_long.index]
-    assert all(sales_long.index == prices_long.index)
+    return sales
 
-    sales_long[prices_long.isna()] = pd.NA
-    return sales_long
+def get_rmsse(y_hat: pd.DataFrame, sales_long: pd.DataFrame):
+    y_true = sales_long.loc[y_hat.index, y_hat.columns]
+    y_train = sales_long.loc[sales_long.index.difference(y_hat.index), y_hat.columns]
+
+    mse = ((y_hat - y_true) ** 2).mean(axis=0)
+    scale = ((y_train.diff(axis=0)) ** 2).mean(axis=0)
+    rmsse = np.sqrt(mse / scale)
+    # replace NaN and infinite with 0
+    rmsse = rmsse.replace([np.inf, np.nan], 0)
+    return rmsse
+
+def get_wrmsse(y_hat: pd.DataFrame, sales_long: pd.DataFrame, weights: pd.DataFrame):
+    rmsse = get_rmsse(y_hat, sales_long)
+    wrmsse = (weights.loc[rmsse.index]['series_weight'] * rmsse).sum()
+    return wrmsse
